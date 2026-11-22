@@ -32,14 +32,16 @@
 - 基线：upstream main `9fee64ead5671c39905083495c5238fae18523b8`。
 - 已核对华为[官方鉴权说明](https://developer.huawei.com/consumer/cn/doc/appgallery-connect-guides/agcapi-getstarted-0000001111845114/)，新方式为直接 Bearer JWT；原项目仅实现旧 token 交换。
 - 主会话负责契约、fork、凭据文档、本机安装配置与最终验收。实现委派 `gpt-6.1-sol / medium`；独立安全复核使用 `gpt-6.1-sol / high`，理由分别为局部平台适配和认证/凭据隔离检查。文件写入范围互斥。
-- GitHub 浏览器当前未登录，已请求用户完成登录；本地适配继续。
+- 初始 GitHub 浏览器未登录；用户随后完成登录，已创建 [liuhuyu/app-publish-hub](https://github.com/liuhuyu/app-publish-hub) fork，保留 `upstream` 指向原项目。
 - 已完成华为单文件适配、凭据指南与示例；原始历史接入记录保留，并加新旧认证适用范围声明。
 - 独立复核 `gpt-6.1-sol / high` 未发现 P0/P1；P2“旧字符串简写继承顶层 secret”的文档例外已补齐。
 - 本机独立 `.venv` 安装成功；私有应用目录和凭据引用已生成，真实密钥尚未提供。发布包路径留空，避免把旧构建当作待发布产物。
+- 实现提交 `1d06bf61415249c1d92258d7fd1c8e1700c142f8` 已通过 SSH 推送 fork `main`；远端回读一致。未触发 GitHub Actions。
 
 ## 验证与未完成项
 
 - `python3 -m py_compile app_store/stores/huawei.py` 通过；示例 JSON 解析与 `git diff --check` 通过。
+- 独立虚拟环境 `appstore --help` 启动成功，`pip check` 未发现依赖冲突。
 - 已逐项 review 全部 diff；私有配置、应用目录及华为下载私钥文件匹配 Git 忽略规则。
 - 按用户规则未运行自动测试、未联网鉴权、未实际上传或提审。没有华为发布服务账号，不将本地验证记作真实 API 接入成功。
-- 待用户完成 GitHub 登录后创建 fork、推送并回读远端提交；当前 roadmap 保持执行中。
+- 本次 fork、适配与凭据指引已完成。后续真实只读鉴权需要用户在华为后台创建并提供具备相应角色的开发者级服务账号 JSON；商店实际提审另行明确范围。
