@@ -58,12 +58,20 @@ Registry (registry.py) -- 按平台名惰性加载适配器
 
 ## 凭证模型
 
+### 华为 Service Account（2026-11-22 fork 适配）
+
+华为新增 `service_account_file` 指向本机下载的开发者级服务账号 JSON，顶层或每个 `apps.<包名>` 条目分别配置。`apps` 存在时仅使用对应包名条目，未知包名不回退。新凭据明确配置后优先使用，读取或格式错误直接失败；旧 `client_id/client_secret` 继续兼容。
+
+新方式使用现有 `cryptography` 生成 PS256 JWT（`kid=key_id`、`iss=sub_account`、固定华为 token audience、有效期 3600 秒），JWT 直接放入 Bearer 请求头，不调用旧 token 交换端点，也不携带旧 `client_id`。两种认证共用包名隔离的加锁缓存和 401 刷新逻辑；Android v2、Harmony v3 的业务接口保持现有实现。
+
+本地 `check` 与华为 dry-run 校验文件、字段和 RSA 私钥，但不发网络请求、不输出密钥。详见[计划 001](plan/001-huawei-service-account.md)及[凭证指南](CREDENTIALS_GUIDE.md)。
+
 `config/credentials.json`（本地私有）顶层按平台分键；**多应用**用 `apps` 映射：
 
 ```json
 {
   "oppo": { "apps": { "com.a.b": {"client_id": "..", "client_secret": ".."} } },
-  "huawei": { "apps": { "com.a.b": {"client_id": "..", "client_secret": "..", "app_id": ".."} } }
+  "huawei": { "apps": { "com.a.b": {"service_account_file": "/secure/huawei-service-account.json", "app_id": ".."} } }
 }
 ```
 

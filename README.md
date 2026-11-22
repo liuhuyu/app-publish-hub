@@ -92,6 +92,8 @@ pip install -e .        # 安装 appstore 命令（本文档所有 appstore ... 
 复制 `config/example.credentials.json` 为 `config/credentials.json`（已 gitignore，不会入库），
 按各平台说明填写。**多应用场景**用 `apps` 映射按包名区分凭证（见 [docs/CREDENTIALS_GUIDE.md](docs/CREDENTIALS_GUIDE.md)）。
 
+本 fork 支持华为新 **Service Account / PS256 JWT**：配置 `service_account_file` 引用开发者后台下载的 JSON，保留旧 API 客户端兼容；不需要把私钥复制进配置。各商店开通入口、配置样例与权限要求见[凭据获取与配置指南](docs/CREDENTIALS_GUIDE.md)。
+
 ### 3. 配置应用目录
 
 复制 `apps/catalog.example.json` 为 `apps/catalog.json`，为每个应用配置包名、APK/AAB 路径（本地真实配置不入库）：
@@ -179,7 +181,7 @@ appstore --json status --app example-app --credentials config/credentials.json
 
 ## 安全提醒
 
-- 凭证（client_secret / 服务账号私钥 / 签名密钥）只保存在 `config/credentials.json`（已在 .gitignore），**切勿提交到仓库**
+- 凭证配置保存在本机私有 JSON；服务账号私钥文件建议放仓库外，通过 `service_account_file` 引用。**切勿提交凭证或私钥到仓库**
 - App发布中枢登录账号与飞书应用凭证保存在 `config/board.json`（同样已 gitignore；模板 `config/example.board.json`）
 - 发布会真实消耗平台配额并触发审核，请先 `--dry-run` 验证
 - 局域网开放 App发布中枢必须先配置登录账号（脚本与服务端双重强制）；不要把端口直接映射公网

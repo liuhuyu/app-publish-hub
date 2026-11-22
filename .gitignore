@@ -28,6 +28,7 @@ config/credentials.json
 **/*acg*.json
 **/*agc*.json
 **/*service-account*.json
+**/*private.json
 **/*haiwai*.json
 
 # 本地应用目录（含真实包名/路径），GitHub 用 catalog.example.json

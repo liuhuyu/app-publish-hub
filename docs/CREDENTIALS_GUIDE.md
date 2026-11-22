@@ -3,6 +3,21 @@
 `config/credentials.json`（本地私有，gitignore 排除）集中存放各平台凭证。
 **多应用**时用 `apps` 键按包名映射凭证（优先于顶层字段）。
 
+推荐将凭据集中放在仓库外（如 `~/Documents/biao-signing/android-stores/`），目录权限 `700`、私钥与配置文件权限 `600`，通过 `--credentials /绝对路径/credentials.json` 使用。只把实际取得凭据的商店加入配置；示例中的占位符不能当成已开通。无需在聊天或工单中粘贴密码、私钥。
+
+## 各商店从哪里获取
+
+| 商店 | 后台入口 | 需要提供到本机的内容 |
+| --- | --- | --- |
+| 华为 | 开发者管理 → ID、证书和 Profile → 凭证 → 开发者级凭证 → 服务账号凭证；AGC 旧界面为用户与权限 → API 密钥 → Connect API → Service Account | 下载的 `*private.json`，以及目标包名/应用 ID |
+| 小米 | 管理中心 → 自动发布接口 | 登录邮箱、接口私钥、下载的公钥证书 |
+| OPPO | 管理中心 → 产品 → 我的 API → 客户端应用 | 发布 API 的 `client_id/client_secret` |
+| vivo（国内） | 账号 → 账号管理 → API 管理 → 开通 | `access_key/access_secret` |
+| 荣耀 | 管理中心 → 开放能力 → 凭证 → 申请凭证 | `client_id/client_secret` |
+| 应用宝 | 账号管理 → API 发布接口 → 申请开通 | `UserID/access_secret` 及应用 `app_id` |
+
+使用具备相应权限的开发者主账号开通。这里需要的是**应用发布 API 凭据**，不是推送 SDK、手机号登录、广告或支付密钥。后台菜单可能随平台改版变化；[华为官方鉴权说明](https://developer.huawei.com/consumer/cn/doc/appgallery-connect-guides/agcapi-getstarted-0000001111845114/)、[小米官方自动发布指南](https://dev.mi.com/xiaomihyperos/documentation/detail?pId=1134)、[荣耀官方 API 指南](https://developer.honor.com/cn/doc/guides/101359)、[DCloud 多商店接入方说明](https://uniapp.dcloud.net.cn/uni-publish/config.html)提供对应入口。
+
 ## 通用结构
 
 ```json
@@ -13,7 +28,8 @@
   "oppo":     { "apps": { "com.android.pkg": { "client_id": "", "client_secret": "" } } },
   "vivo":     { "apps": { "com.android.pkg": { "access_key": "", "access_secret": "" } } },
   "honor":    { "apps": { "com.android.pkg": { "client_id": "", "client_secret": "" } } },
-  "huawei":   { "apps": { "com.android.pkg": { "client_id": "", "client_secret": "", "app_id": "" } } }
+  "huawei":   { "apps": { "com.android.pkg": { "service_account_file": "/absolute/path/huawei-service-account.json", "app_id": "" } } },
+  "qq":       { "user_id": "", "access_secret": "", "apps": { "com.android.pkg": "应用宝app_id" } }
 }
 ```
 
@@ -72,7 +88,7 @@ App Store 链接里的数字 ID：`https://apps.apple.com/cn/app/id1234567890` �
   "apps": {
     "com.example.app": {
       "email": "账号邮箱",
-      "password": "账号密码或私钥",
+      "password": "自动发布接口分配的私钥",
       "public_key": "/绝对路径/dev.api.public.cer"
     }
   }
@@ -80,6 +96,7 @@ App Store 链接里的数字 ID：`https://apps.apple.com/cn/app/id1234567890` �
 ```
 
 - `public_key`：小米开放平台下载的 X509 公钥证书（.cer/.pem），用于 RSA 加密签名
+- `password` 是历史配置字段名，填写小米**接口私钥**，不是小米登录密码
 - 不同账号对应不同证书/私钥，按包名分别配置
 
 ### OPPO 软件商店
@@ -88,7 +105,7 @@ App Store 链接里的数字 ID：`https://apps.apple.com/cn/app/id1234567890` �
 "oppo": { "apps": { "com.android.pkg": { "client_id": "19位", "client_secret": "..." } } }
 ```
 
-- client_id 为 **19 位数字**（OPPO 开放平台 → 应用 → 密钥）
+- client_id 为 **19 位数字**（OPPO 开放平台 → 产品 → 我的 API；不是应用推送密钥）
 - 更新版本自动复用现有资料，无需重复传图标/截图
 
 ### vivo 应用商店
@@ -107,45 +124,81 @@ App Store 链接里的数字 ID：`https://apps.apple.com/cn/app/id1234567890` �
 
 - 荣耀开发者服务平台 → 凭证（client_id / 密钥）
 
-### 华为 AppGallery（重点注意）
+### 华为 AppGallery：Service Account（推荐）
+
+1. 由账号持有人在上表入口创建**开发者级**服务账号，授予目标应用上传、发布/查询所需角色（例如 APP 管理员，以后台当前角色权限为准）。无需提供账号密码给 CLI。
+2. 点击生成公私钥并下载 JSON。文件应包含 `key_id`、`private_key`、`sub_account`；若没有生成密钥，下载文件可能缺少私钥，需要在后台补齐。
+3. 将下载文件保存在本机仓库外，例如 `~/Documents/biao-signing/android-stores/huawei-service-account.json`，无需编辑 JSON 内容。
+4. 配置下方 `service_account_file`，指向该文件。支持绝对路径和 `~`；相对路径以命令执行目录为准，建议使用绝对路径以避免切换目录后找不到文件。
 
 ```json
 "huawei": {
   "apps": {
     "com.android.pkg": {
-      "client_id": "19位API客户端ID（project_client_id 类型）",
-      "client_secret": "64位十六进制密钥",
+      "service_account_file": "~/Documents/biao-signing/android-stores/huawei-service-account.json",
       "app_id": "应用数字ID"
     }
   }
 }
 ```
 
-**关键坑**：
-- 必须使用 **API 客户端类型（project_client_id）** 凭证：在 AGC 控制台 → 用户与访问 → API 凭证 → 新建，生成 19 位 client_id + 64 位 secret
-- **不要**使用「常规」页的 OAuth2.0 client_id（= App ID），那种凭证调发布 API 会 403
-- 每个 client 归属于一个项目，只能管理该项目下应用；不同 app 可能需各自建 API 客户端
-- 如果要同时管 Harmony 应用（包名与 Android 不同、app_id 不同），必须为 Harmony 包名**单独配一条**，
-  并加上 `"app_kind": "harmony"`：否则版本拉取与提审会按 Android APK 流程处理，直接报错
-- Harmony 条目里的 `client_id` / `client_secret` 也要写全（不会自动继承顶层配置）
-- 同时要在 `apps/catalog.json` 对应应用里配置 `huawei_harmony_package`，版本下拉与提审都用这个包名匹配凭证
+- CLI 使用现有 `cryptography` 在本机签署 PS256 JWT，直接作为 Bearer；无需额外配置 `client_id/client_secret`，不调用旧 token 交换接口。
+- JWT 有效期一小时，缓存按包名隔离，到期前刷新，收到 HTTP 401 时强制刷新后最多重试一次。
+- 同时出现新旧认证字段时使用 `service_account_file`；文件不存在、格式或私钥错误会直接失败，不静默换用旧账号。
+- `apps` 存在时必须有明确包名条目；凭证对象不自动继承其它应用或顶层认证。兼容例外是旧 `apps[包名] = "client_id"` 字符串简写，它仍使用顶层 `client_secret`。多个应用可显式引用同一开发者级服务账号文件，但该账号必须有各应用相应权限。
+- 单应用也可在 `huawei` 顶层直接写 `service_account_file`；Android 根据 APK 包名查询 appId，Harmony 仍需显式 `app_id`。
+- 修改/轮换凭据后重启长期运行的 Web 服务，让新凭据立即生效。
 
-### 多应用示例（华为）
+### 华为旧 API 客户端兼容
+
+已有发布 API 客户端仍可用原配置：
 
 ```json
 "huawei": {
   "apps": {
-    "com.example.app": { "client_id": "...1", "client_secret": "...", "app_id": "100000001" },
-    "com.kaidishi.lock":       { "client_id": "...2", "client_secret": "...", "app_id": "100038281" },
-    "com.kaadas.lock":         { "client_id": "...3", "client_secret": "...", "app_id": "100000002", "app_kind": "harmony" }
+    "com.android.pkg": {
+      "client_id": "已有发布API客户端ID",
+      "client_secret": "已有发布API客户端密钥",
+      "app_id": "应用数字ID"
+    }
   }
 }
 ```
 
+旧方式继续调用 `/api/oauth2/v1/token` 并携带 `client_id` 请求头。不要使用普通应用的 OAuth 登录/推送凭据。华为官方建议新建凭据选 Service Account，并迁移旧客户端；权限取决于实际凭据级别和角色，不再把所有凭据都当作 `project_client_id`。
+
+### 华为 Android / Harmony 多应用示例
+
+```json
+"huawei": {
+  "apps": {
+    "com.example.android": { "service_account_file": "/secure/huawei-service-account.json", "app_id": "100000001" },
+    "com.example.harmony": { "service_account_file": "/secure/huawei-service-account.json", "app_id": "100000002", "app_kind": "harmony" }
+  }
+}
+```
+
+Harmony 包名须单独配置并标记 `app_kind: "harmony"`。如需现有 Android/Harmony 联合发布入口，同时在应用目录配置 `huawei_harmony_package`。本次仅增加认证支持，Harmony 仍选择 AGC 已上传构建，不从本机上传新 `.app/.hap`。
+
+### 腾讯应用宝
+
+```json
+"qq": {
+  "user_id": "开发者UserID",
+  "access_secret": "API发布接口密钥",
+  "apps": { "com.example.app": "应用宝app_id" }
+}
+```
+
+CLI 平台名是 `qq`。当前适配器只支持已上线应用的更新；首次创建/发布在应用宝后台完成。
+
 ## 校验凭证
 
 ```bash
-appstore validate --credentials config/credentials.json
+appstore --json validate --credentials /absolute/path/credentials.json
+appstore --json status --platform huawei --package com.example.app --credentials /absolute/path/credentials.json
 ```
 
-所有平台凭证均可先 `--dry-run` 发布（仅校验本地字段，不发请求）。
+`validate` 是本地配置检查；华为会校验服务账号文件、必要字段和 RSA 私钥，但不验证后台权限。`status` 才会请求商店的只读查询接口，可用于确认账号权限。不要以本地检查通过代替真实鉴权成功。
+
+华为 `publish --dry-run` 仅本地校验（含 Android/Harmony），不联网、不提审。其它商店 dry-run 行为不同：Google 会创建并删除 edit，应用宝会调用只读接口，详见[架构说明](ARCHITECTURE.md#dry-run-行为)。实际 `publish` 会上传并提交审核，应在明确发布范围后使用。

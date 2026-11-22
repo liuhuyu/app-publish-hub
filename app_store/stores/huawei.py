@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -25,6 +26,7 @@ from ..models import AuditState, Platform, Release, SubmitResult, StoreStatus, s
 from ..upload_progress import ProgressFile, make_multipart_monitor
 
 _DOMAIN = "https://connect-api.cloud.huawei.com"
+_SERVICE_ACCOUNT_AUDIENCE = "https://oauth-login.cloud.huawei.com/oauth2/v3/token"
 
 
 class HuaweiAdapter(StoreAdapter):
@@ -35,37 +37,123 @@ class HuaweiAdapter(StoreAdapter):
 
     def __init__(self, credentials: Dict[str, Any]) -> None:
         super().__init__(credentials)
-        self._apps = self.credentials.get("apps") or {}
-        self._cid = self.credentials.get("client_id") or ""
+        self._has_apps = "apps" in self.credentials
+        self._apps = self.credentials.get("apps")
         self._csec = self.credentials.get("client_secret") or ""
         # OAuth token 缓存：pkg -> (token, 过期时间戳)，加锁保证并发安全
         self._token_cache: Dict[str, Tuple[str, float]] = {}
+        self._token_locks: Dict[str, Any] = {}
         self._token_lock = threading.Lock()
 
     def _cred_for(self, pkg: str) -> dict:
-        if self._apps:
-            c = self._apps.get(pkg) or {}
+        if self._has_apps:
+            if not isinstance(self._apps, dict):
+                raise StoreError("华为凭证 apps 必须为包名映射")
+            if pkg not in self._apps:
+                raise StoreError(f"华为凭证 apps 中没有 {pkg}")
+            c = self._apps[pkg]
             # 兼容 apps[pkg] 直接写 client_id 字符串的简写形式
             if isinstance(c, str):
                 c = {"client_id": c, "client_secret": self._csec}
-            if not c.get("client_id"):
-                raise StoreError(f"华为凭证 apps 中没有 {pkg}")
+            if not isinstance(c, dict):
+                raise StoreError(f"华为凭证 apps[{pkg}] 必须为凭证对象或 client_id 字符串")
             return c
-        return {"client_id": self._cid, "client_secret": self._csec}
+        return self.credentials
+
+    @staticmethod
+    def _service_account(cred: dict) -> tuple:
+        """只在本地读取并校验私钥；异常不包含文件内容或底层异常链。"""
+        path = cred.get("service_account_file")
+        if not isinstance(path, str) or not path.strip():
+            raise StoreError("华为 service_account_file 必须为非空文件路径")
+        try:
+            with open(os.path.expanduser(path), "r", encoding="utf-8") as f:
+                account = json.load(f)
+        except (OSError, ValueError, UnicodeError):
+            raise StoreError("华为 Service Account 文件无法读取或不是有效 JSON") from None
+        if not isinstance(account, dict) or any(
+            not isinstance(account.get(k), str) or not account[k].strip()
+            for k in ("key_id", "private_key", "sub_account")
+        ):
+            raise StoreError("华为 Service Account 缺少有效的 key_id/private_key/sub_account")
+        try:
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric import rsa
+            key = serialization.load_pem_private_key(account["private_key"].encode("utf-8"), password=None)
+        except Exception:
+            # cryptography 也可能抛出 UnsupportedAlgorithm，不暴露密钥解析详情。
+            raise StoreError("华为 Service Account 私钥无法加载，请确认 cryptography 依赖与未加密 PEM 私钥") from None
+        if not isinstance(key, rsa.RSAPrivateKey):
+            raise StoreError("华为 Service Account 私钥必须为 RSA")
+        return account, key
+
+    def _validate_credential(self, cred: dict) -> None:
+        if "service_account_file" in cred:
+            self._service_account(cred)
+        elif any(not isinstance(cred.get(k), str) or not cred[k].strip()
+                 for k in ("client_id", "client_secret")):
+            raise StoreError("华为凭证缺少有效的 client_id/client_secret")
+
+    def check(self) -> List[str]:
+        issues: List[str] = []
+        if self._has_apps:
+            if not isinstance(self._apps, dict) or not self._apps:
+                return ["华为凭证 apps 必须为非空包名映射"]
+            packages = list(self._apps)
+        else:
+            packages = [""]
+        for pkg in packages:
+            try:
+                if not isinstance(pkg, str) or (self._has_apps and not pkg.strip()):
+                    raise StoreError("华为凭证 apps 包名必须为非空字符串")
+                self._validate_credential(self._cred_for(pkg))
+            except StoreError as exc:
+                issues.append(f"华为凭证 {pkg or '顶层'}: {exc}")
+        return issues
+
+    @staticmethod
+    def _service_account_token(cred: dict, now: int) -> str:
+        account, key = HuaweiAdapter._service_account(cred)
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding
+
+        def encode(value: bytes) -> str:
+            return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+        header = {"alg": "PS256", "typ": "JWT", "kid": account["key_id"]}
+        payload = {"iss": account["sub_account"], "aud": _SERVICE_ACCOUNT_AUDIENCE,
+                   "iat": now, "exp": now + 3600}
+        content = ".".join(encode(json.dumps(part, separators=(",", ":")).encode("utf-8"))
+                           for part in (header, payload))
+        try:
+            signature = key.sign(content.encode("ascii"),
+                                 padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=32),
+                                 hashes.SHA256())
+        except Exception:
+            raise StoreError("华为 Service Account JWT 签名失败") from None
+        return content + "." + encode(signature)
 
     # token 过期前提前续期的余量（秒）
     _TOKEN_REFRESH_MARGIN = 60
 
     def _token(self, pkg: str, force_refresh: bool = False) -> str:
-        import requests
-        now = time.time()
         with self._token_lock:
+            lock = self._token_locks.setdefault(pkg, threading.Lock())
+        with lock:
+            now = time.time()
             if not force_refresh:
                 cached = self._token_cache.get(pkg)
                 # 命中缓存且距过期还有余量时直接复用
                 if cached and cached[1] - now > self._TOKEN_REFRESH_MARGIN:
                     return cached[0]
             cred = self._cred_for(pkg)
+            if "service_account_file" in cred:
+                issued_at = int(now)
+                tok = self._service_account_token(cred, issued_at)
+                self._token_cache[pkg] = (tok, issued_at + 3600)
+                return tok
+            self._validate_credential(cred)
+            import requests
             r = requests.post(
                 f"{_DOMAIN}/api/oauth2/v1/token",
                 json={
@@ -94,10 +182,11 @@ class HuaweiAdapter(StoreAdapter):
             return tok
 
     def _headers(self, pkg: str, force_refresh: bool = False) -> dict:
-        return {
-            "client_id": self._cred_for(pkg)["client_id"],
-            "Authorization": "Bearer " + self._token(pkg, force_refresh=force_refresh),
-        }
+        cred = self._cred_for(pkg)
+        headers = {"Authorization": "Bearer " + self._token(pkg, force_refresh=force_refresh)}
+        if "service_account_file" not in cred:
+            headers["client_id"] = cred["client_id"]
+        return headers
 
     def _get(self, path: str, params: dict, pkg: str) -> dict:
         import requests
@@ -168,11 +257,18 @@ class HuaweiAdapter(StoreAdapter):
         import time as _t
         import requests
         last_payload: dict = {}
+        refreshed = False
         for attempt in range(max_attempts):
             url = _DOMAIN + path
             if query:
                 url += "?" + urllib.parse.urlencode(query)
             r = requests.post(url, json={}, headers=self._headers(pkg), timeout=60)
+            if r.status_code == 401 and not refreshed:
+                refreshed = True
+                r = requests.post(url, json={},
+                                  headers=self._headers(pkg, force_refresh=True), timeout=60)
+            if r.status_code == 401:
+                self._parse_json(r, path)
             try:
                 d = r.json()
             except Exception:
@@ -231,7 +327,7 @@ class HuaweiAdapter(StoreAdapter):
         # 该应用还关联了 Harmony 包名 → 一并查询并合并展示
         if harmony_package:
             try:
-                hcred = self._apps.get(harmony_package) or {}
+                hcred = self._cred_for(harmony_package)
                 h_app_id = hcred.get("app_id") or ""
                 if h_app_id:
                     hs = self._query_harmony(harmony_package, h_app_id)
@@ -431,6 +527,7 @@ class HuaweiAdapter(StoreAdapter):
             raise StoreError("华为 Harmony 发布前请先在下拉里选择要提交的构建版本")
 
         if dry_run:
+            self._validate_credential(cred)
             return SubmitResult(self.platform, True,
                                 f"华为 Harmony: dry-run 通过（待提交 {sel_name or sel_code}）",
                                 state=AuditState.DRAFT)
@@ -522,8 +619,7 @@ class HuaweiAdapter(StoreAdapter):
         cred = self._cred_for(release.package_name)
         if dry_run:
             # dry-run 本地校验：凭证字段齐全 + 安装包存在（与其他国内平台一致）
-            if not cred.get("client_id") or not cred.get("client_secret"):
-                raise StoreError("华为 dry-run：缺少 client_id/client_secret")
+            self._validate_credential(cred)
             if not release.apk_path or not os.path.isfile(release.apk_path):
                 raise StoreError(f"华为 dry-run：APK 不存在: {release.apk_path or '(未提供)'}")
             return SubmitResult(self.platform, True, "华为: dry-run 通过", state=AuditState.DRAFT)

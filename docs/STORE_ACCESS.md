@@ -1,5 +1,7 @@
 # 各平台接入清单（2026-08 实测）
 
+> **2026-11-22 fork 更新**：下方保留原实测记录。华为认证已新增开发者级 Service Account（`service_account_file`、PS256 JWT 直接 Bearer），旧 API 客户端兼容；原“必须使用 project_client_id”说法不适用于新方式。当前配置以[凭据指南](CREDENTIALS_GUIDE.md#华为-appgalleryservice-account推荐)和[计划 001](plan/001-huawei-service-account.md)为准。本次仅做编译与代码复核，尚未取得真实服务账号，未宣称新方式已实机/联网跑通。
+
 > 全部平台已实现 publish + query_status。以下为各平台实测用的接口与凭证要点。
 
 ## Google Play
